@@ -1,0 +1,16 @@
+{
+  "name": "youmian-ai",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "优面AI - 基于真实面试官人设的 AI 求职陪练",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "deploy": "vercel --prod"
+  },
+  "devDependencies": {
+    "vite": "^5.4.10"
+  }
+}
