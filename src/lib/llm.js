@@ -15,7 +15,7 @@ async function detectMode() {
   // auto: 试 ping 一次 /api/llm 看后端是否就绪
   try {
     const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 2000);
+    const t = setTimeout(() => ctrl.abort(), 5000);
     const r = await fetch('/api/llm', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -73,7 +73,10 @@ async function jsonReal(opts) {
       const err = await r.text().catch(() => '');
       throw new Error(`LLM ${r.status}: ${err.slice(0, 200)}`);
     }
-    const data = await r.json();
+    let data;
+    try { data = await r.json(); } catch (parseErr) {
+      throw new Error('LLM ' + r.status + ': invalid json response');
+    }
     const text = data?.choices?.[0]?.message?.content || '';
     const usage = data?.usage || {};
     if (DEBUG) console.log(`[llm] real ${Date.now() - start}ms · tokens=${usage.total_tokens ?? '-'}`);
@@ -91,15 +94,24 @@ async function streamReal(opts) {
   const ctrl = signal ? null : new AbortController();
   const timer = signal ? null : setTimeout(() => ctrl.abort(), timeoutMs);
   const start = Date.now();
-  const r = await fetch('/api/llm', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ system, messages, stream: true, jsonMode, maxTokens, temperature }),
-    signal: signal || ctrl.signal
-  });
+  let r;
+  try {
+    r = await fetch('/api/llm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ system, messages, stream: true, jsonMode, maxTokens, temperature }),
+      signal: signal || ctrl.signal
+    });
+  } catch (e) {
+    if (timer) clearTimeout(timer);
+    console.warn('[llm] stream fetch fail (network/abort/timeout) → fallback mock:', e?.message || e);
+    return mockResponse({ stream: true });
+  }
   if (!r.ok || !r.body) {
     if (timer) clearTimeout(timer);
-    console.warn('[llm] stream fail → fallback mock');
+    let body = '';
+    try { body = await r.text(); } catch {}
+    console.warn('[llm] stream HTTP ' + r.status + ' → fallback mock:', body.slice(0, 200));
     return mockResponse({ stream: true });
   }
   const reader = r.body.getReader();

@@ -21,7 +21,15 @@ module.exports = async function handler(req, res) {
 
   // 探活：__ping__ 直接返回 ok
   if (messages.length === 1 && messages[0].content === '__ping__') {
-    return res.status(200).json({ status: 'ok', provider: process.env.LLM_PROVIDER || 'mock' });
+    return res.status(200).json({
+      status: 'ok',
+      provider: process.env.LLM_PROVIDER || 'mock',
+      model: process.env.LLM_MODEL || 'MiniMax-M3',
+      hasKey: !!process.env.LLM_API_KEY,
+      endpoint: (process.env.LLM_ENDPOINT || 'https://api.MiniMax.chat/v1/chat/completions').replace(/\/v1\/.+$/, ''),
+      region: process.env.VERCEL_REGION || 'unknown',
+      ts: Date.now()
+    });
   }
 
   const provider = (process.env.LLM_PROVIDER || 'minimax').toLowerCase();
@@ -45,7 +53,9 @@ module.exports = async function handler(req, res) {
   if (jsonMode) upstreamBody.response_format = { type: 'json_object' };
 
   try {
-    const upstream = await fetch(cfg.endpoint, {
+    res.setHeader('X-LLM-Mode', provider);
+  res.setHeader('Access-Control-Expose-Headers', 'X-LLM-Mode, X-LLM-Error');
+  const upstream = await fetch(cfg.endpoint, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -67,13 +77,20 @@ module.exports = async function handler(req, res) {
       res.setHeader('Connection', 'keep-alive');
       const reader = upstream.body.getReader();
       const decoder = new TextDecoder();
+      let streamBroken = false;
       try {
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
           res.write(decoder.decode(value, { stream: true }));
         }
+      } catch (streamErr) {
+        streamBroken = true;
+        console.error('[llm] stream broken mid-flight:', streamErr.message);
       } finally {
+        if (streamBroken) {
+          try { res.write('data: [DONE]\n\n'); } catch {}
+        }
         res.end();
       }
     } else {
@@ -114,6 +131,9 @@ function getProviderConfig(provider, apiKey, defaultModel) {
 
 // ===== Mock 兜底（保证前端永远不崩）=====
 function mockResponse(req, res, { system, messages, stream, jsonMode, error }) {
+  res.setHeader('X-LLM-Mode', 'mock');
+  if (error) res.setHeader('X-LLM-Error', String(error).slice(0, 200));
+  res.setHeader('Access-Control-Expose-Headers', 'X-LLM-Mode, X-LLM-Error');
   const lastUser = [...messages].reverse().find(m => m.role === 'user')?.content || '';
   const text = mockText(system, lastUser, jsonMode, error);
 
