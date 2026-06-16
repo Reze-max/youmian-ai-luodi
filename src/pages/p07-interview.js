@@ -379,7 +379,19 @@ async function callAIStream(system, messages, _tag) {
     if (r.mode === 'mock') toast('💡 Mock 模式（未配置 KEY）');
   } catch (e) {
     console.error('[p07] stream fail', e);
-    full = full || '（AI 调用失败，请检查 /api/llm 配置）';
+    if (!full) {
+      const lastErr = window.YOUMIAN_LLM?.getLastError?.();
+      const inCd = window.YOUMIAN_LLM?.isInCooldown?.();
+      if (lastErr?.status === 429 || inCd) {
+        full = '⏳ M3 API 限流中（已自动切 Mock 兜底）。60 秒后自动重试。控制台跑 YOUMIAN_LLM.forceMock() 可强制 Mock。';
+      } else if (lastErr?.status === 401 || lastErr?.status === 403) {
+        full = '🔑 LLM_API_KEY 无效或无权访问。请检查 Vercel 环境变量配置。';
+      } else if (lastErr?.status >= 500) {
+        full = '⚠️ 上游 LLM 服务异常（HTTP ' + lastErr.status + '）。已降级到 Mock 兜底。';
+      } else {
+        full = '（AI 调用失败，请检查 /api/llm 配置）';
+      }
+    }
     bubble.textContent = full;
   } finally {
     state.aiStreaming = false;

@@ -9,9 +9,36 @@ const DEFAULT_TIMEOUT = 30000;
 const DEBUG = (import.meta?.env?.VITE_DEBUG ?? 'true') === 'true';
 const MODE_HINT = (import.meta?.env?.VITE_LLM_MODE ?? 'auto'); // auto | real | mock
 
+// ===== 限流 cooldown：M3 返回 429 后 N 秒内跳过真实调用 =====
+const RATE_LIMIT_COOLDOWN_MS = 60000;
+let _rateLimitedUntil = 0;
+let _lastErrorInfo = null;
+function isInCooldown() { return Date.now() < _rateLimitedUntil; }
+function markRateLimited(retryAfterSec) {
+  const wait = (Number(retryAfterSec) || 60) * 1000;
+  _rateLimitedUntil = Date.now() + Math.min(wait, RATE_LIMIT_COOLDOWN_MS * 3);
+  console.warn('[llm] rate limited, cooldown until', new Date(_rateLimitedUntil).toISOString());
+}
+function getLastError() { return _lastErrorInfo; }
+function setLastError(info) { _lastErrorInfo = info; }
+
+// ===== 用户手动强制 mock（localStorage 持久化）=====
+function forceMockEnabled() {
+  try { return localStorage.getItem('YOUMIAN_FORCE_MOCK') === '1'; } catch { return false; }
+}
+function setForceMock(on) {
+  try {
+    if (on) localStorage.setItem('YOUMIAN_FORCE_MOCK', '1');
+    else localStorage.removeItem('YOUMIAN_FORCE_MOCK');
+    _mode = null; // 重新探测
+  } catch {}
+}
+
 async function detectMode() {
+  if (forceMockEnabled()) return 'mock';
   if (MODE_HINT === 'mock') return 'mock';
   if (MODE_HINT === 'real') return 'real';
+  if (isInCooldown()) return 'mock';
   // auto: 试 ping 一次 /api/llm 看后端是否就绪
   try {
     const ctrl = new AbortController();
@@ -43,6 +70,9 @@ export function _setMode(m) { _mode = m; }
 export async function callLLM({ system, messages, stream = false, jsonMode = false, maxTokens = 1000, temperature = 0.7, timeoutMs = DEFAULT_TIMEOUT, signal }) {
   const mode = await getMode();
   if (mode === 'mock') {
+    if (isInCooldown()) {
+      console.info('[llm] skipping real call (cooldown), using mock');
+    }
     return mockResponse({ system, messages, stream, jsonMode });
   }
   if (stream) {
@@ -71,6 +101,14 @@ async function jsonReal(opts) {
     });
     if (!r.ok) {
       const err = await r.text().catch(() => '');
+      // 429 触发 cooldown，避免连续重试导致 429 持续
+      if (r.status === 429) {
+        const ra = r.headers.get('retry-after');
+        markRateLimited(ra);
+        setLastError({ status: 429, message: 'rate limited', retryAfter: ra });
+      } else if (r.status >= 500) {
+        setLastError({ status: r.status, message: err.slice(0, 200) });
+      }
       throw new Error(`LLM ${r.status}: ${err.slice(0, 200)}`);
     }
     let data;
@@ -112,6 +150,13 @@ async function streamReal(opts) {
     let body = '';
     try { body = await r.text(); } catch {}
     console.warn('[llm] stream HTTP ' + r.status + ' → fallback mock:', body.slice(0, 200));
+    if (r.status === 429) {
+      const ra = r.headers.get('retry-after');
+      markRateLimited(ra);
+      setLastError({ status: 429, message: 'rate limited', retryAfter: ra });
+    } else if (r.status >= 500) {
+      setLastError({ status: r.status, message: body.slice(0, 200) });
+    }
     return mockResponse({ stream: true });
   }
   const reader = r.body.getReader();
@@ -255,5 +300,12 @@ function mockInterviewer(user) {
   return '挺好，你讲得比较具体。我追问一下：你刚才提到的那个数字，分母是什么？对比对象是谁？如果换个场景，你会怎么做？';
 }
 
-export const YOUMIAN_LLM = { callLLM, getMode, _setMode };
+export const YOUMIAN_LLM = {
+  callLLM, getMode, _setMode,
+  isInCooldown, getLastError,
+  forceMock: () => setForceMock(true),
+  unforceMock: () => setForceMock(false),
+  isForcedMock: forceMockEnabled,
+  clearCooldown: () => { _rateLimitedUntil = 0; _mode = null; }
+};
 if (typeof window !== 'undefined') window.YOUMIAN_LLM = YOUMIAN_LLM;
