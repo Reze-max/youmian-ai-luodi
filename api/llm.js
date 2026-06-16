@@ -5,7 +5,7 @@
 // Provider: minimax | qwen | openai | mock（缺 KEY 时 mock 兜底）
 // ============================================================
 
-module.exports = async function handler(req, res) {
+export default async function handler(req, res) {
   // CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
