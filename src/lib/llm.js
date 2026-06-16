@@ -67,7 +67,18 @@ export async function getMode() {
 export function _setMode(m) { _mode = m; }
 
 // ===== 主入口 =====
+const NO_THINK_SUFFIX = '\n\n【输出约束】直接输出最终内容。绝对不要输出任何内部思考/推理标签（如 块、<reasoning>、分析过程：等），只输出候选人能看到的文字。';
+
+// 强化 system：追加 no-think 指令
+function reinforceSystem(sys) {
+  if (!sys) return NO_THINK_SUFFIX.trim();
+  if (sys.includes('【输出约束】')) return sys;
+  return sys + NO_THINK_SUFFIX;
+}
+
 export async function callLLM({ system, messages, stream = false, jsonMode = false, maxTokens = 1000, temperature = 0.7, timeoutMs = DEFAULT_TIMEOUT, signal }) {
+  // 统一强化 system，避免 AI 输出 推理标签
+  system = reinforceSystem(system);
   const mode = await getMode();
   if (mode === 'mock') {
     if (isInCooldown()) {

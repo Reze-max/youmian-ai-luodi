@@ -363,6 +363,22 @@ function buildEvalSystem() {
 }
 
 // ===== 通用：流式调用 =====
+// ===== 工具：剥掉 AI 输出的 思考/推理 标签，只保留给候选人看的内容 =====
+function stripThinkTags(text) {
+  if (!text) return '';
+  let t = String(text);
+  // 1) 完整闭合的 think 块（含跨行）
+  t = t.replace(/<(think|thinking|reasoning|reflection|analysis)>[\s\S]*?<\/(?:\1)>/gi, '');
+  // 2) 未闭合的 块（流式中断时可能只剩开标签和内容）
+  t = t.replace(/<(think|thinking|reasoning|reflection|analysis)>[\s\S]*$/gi, '');
+  // 3) 任何残留的标签片段
+  t = t.replace(/<\/?(?:think|thinking|reasoning|reflection|analysis)>/gi, '');
+  // 4) 启发式切掉 "思考过程：" 之后的内容
+  const m = t.match(/^(.{0,400}?)(?:\n\s*\n)?(?:思考过程|推理过程|分析过程|Thought|Reasoning)\s*[:：]/);
+  if (m && m[1].trim().length > 10) t = m[1].trim();
+  return t.trim();
+}
+
 async function callAIStream(system, messages, _tag) {
   showAnalyzing('AI 思考中…');
   let full = '';
@@ -373,7 +389,7 @@ async function callAIStream(system, messages, _tag) {
     state.abort = r.abort;
     for await (const chunk of r.stream) {
       full += chunk;
-      bubble.textContent = full;
+      bubble.textContent = stripThinkTags(full);
       scrollConv();
     }
     if (r.mode === 'mock') toast('💡 Mock 模式（未配置 KEY）');
@@ -392,12 +408,12 @@ async function callAIStream(system, messages, _tag) {
         full = '（AI 调用失败，请检查 /api/llm 配置）';
       }
     }
-    bubble.textContent = full;
+    bubble.textContent = stripThinkTags(full);
   } finally {
     state.aiStreaming = false;
     state.abort = null;
   }
-  return full;
+  return stripThinkTags(full);
 }
 
 // ===== UI helpers =====
