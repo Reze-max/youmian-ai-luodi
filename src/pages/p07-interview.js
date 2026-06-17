@@ -36,7 +36,7 @@ export async function mount(el, params = {}) {
       current: null,  // 当前 Q&A: {q, a, feedback, score, followups: []}
       stages: interview.stages || [],
       followupCount: 0,
-      maxFollowup: 1,  // 每题最多追问 1 次
+      maxFollowup: 2,  // 每题最多追问 2 组（每组 1-3 个子问题）
       aiStreaming: false,
       abort: null,
       cardRef: null
@@ -70,6 +70,11 @@ function destroy() {
 function renderShell(el) {
   const meta = COMPANIES.find(c => c.id === state.company) || COMPANIES[0];
   const stageLabels = ['开场', '简历深挖', '专业问题', '开放问题', '实习/薪资', '反问'];
+  // 6 阶段映射到 5 段进度条（最后两段合并）
+  const seg = Math.min(state.stageIdx, 4);
+  const segs = Array.from({length: 5}, (_, i) =>
+    '<div style="flex:1; height:6px; border-radius:3px; background:' + (i <= seg ? 'var(--primary)' : 'var(--border)') + '; transition:background 0.3s;"></div>'
+  ).join('');
 
   el.innerHTML = `
     <div style="position:sticky; top:0; z-index:50; background:linear-gradient(135deg, #5B4FE9 0%, #7B68EE 100%); color:white; padding:14px 20px; display:flex; align-items:center; justify-content:space-between;">
@@ -78,24 +83,20 @@ function renderShell(el) {
       <span style="font-size:11px; background:rgba(255,255,255,0.2); padding:3px 8px; border-radius:8px;" id="__p07-progress">1/6</span>
     </div>
 
-    <div style="display:flex; gap:6px; padding:12px 16px; align-items:center; background:white; border-bottom:1px solid var(--border);">
-    <div style="display:flex; align-items:center; gap:12px; background:white; border-radius:12px; padding:12px 14px; margin:12px 16px 0; box-shadow:0 1px 3px rgba(0,0,0,0.04);">
-      <div style="width:48px; height:48px; background:linear-gradient(135deg, #5B4FE9, #7B68EE); border-radius:50%; display:flex; align-items:center; justify-content:center; color:white; font-size:22px;">🧑‍💼</div>
+    <div id="__p07-progress-bar" style="display:flex; gap:6px; padding:14px 16px 4px; background:white;">
+      ${segs}
+    </div>
+
+    <div style="display:flex; align-items:center; gap:12px; background:white; border-radius:12px; padding:10px 14px; margin:4px 16px 10px; box-shadow:0 1px 3px rgba(0,0,0,0.04);">
+      <div style="width:44px; height:44px; background:linear-gradient(135deg, #5B4FE9, #7B68EE); border-radius:50%; display:flex; align-items:center; justify-content:center; color:white; font-size:20px; flex-shrink:0;">🧑‍💼</div>
       <div style="flex:1; min-width:0;">
-        <div style="display:flex; align-items:center; gap:6px;">
-          <span style="font-weight:600; font-size:14px;" id="__p07-interviewer-name">${meta.short}面试官·${state._interviewerName || "AI"}</span>
-          <span class="tag tag-primary" style="font-size:9px; padding:2px 6px;" id="__p07-stage-badge">${stageLabels[state.stageIdx]}</span>
+        <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+          <span style="font-weight:600; font-size:14px;" id="__p07-interviewer-name">${meta.short}面试官·${state._interviewerName || 'AI'}</span>
+          <span class="tag tag-primary" style="font-size:10px; padding:2px 7px;" id="__p07-stage-badge">${stageLabels[state.stageIdx]}</span>
         </div>
         <div style="font-size:11px; color:#6B7280; margin-top:2px;" id="__p07-stage-hint">👋 面试官在等待你的自我介绍...</div>
       </div>
-      <button id="__p07-voice-btn" style="width:36px; height:36px; background:#F0EEFF; border-radius:50%; font-size:16px; display:flex; align-items:center; justify-content:center; cursor:pointer;" title="语音播报">🔊</button>
-    </div>
-      ${stageLabels.map((label, i) => `
-        <div style="flex:1; text-align:center;">
-          <div style="height:4px; background:${i <= state.stageIdx ? 'var(--primary)' : 'var(--border)'}; border-radius:2px; margin-bottom:4px;"></div>
-          <div style="font-size:10px; color:${i === state.stageIdx ? 'var(--primary)' : 'var(--text-3)'}; font-weight:${i === state.stageIdx ? '600' : '400'};">${label}</div>
-        </div>
-      `).join('')}
+      <button id="__p07-voice-btn" style="width:36px; height:36px; background:#F0EEFF; border:none; border-radius:50%; font-size:16px; display:flex; align-items:center; justify-content:center; cursor:pointer; flex-shrink:0;" title="语音播报">🔊</button>
     </div>
 
     <div id="__p07-conversation" style="padding:14px 16px; min-height:60vh; background:var(--bg);"></div>
@@ -240,7 +241,7 @@ async function submitAnswer() {
   // 评估后决定：追问 or 下一题
   const shouldFollowup = shouldFollowup(text, state.current.score);
   state.cardRef.querySelector('#__p07-next').textContent = shouldFollowup
-    ? `🔄 继续追问（${state.followupCount + 1}/${state.maxFollowup}）`
+    ? `🔄 追问下一组（${state.followupCount + 1}/${state.maxFollowup}）`
     : '→ 下一题';
   state.cardRef.querySelector('#__p07-next').onclick = shouldFollowup ? () => askFollowup() : () => proceedNext();
 }
@@ -254,19 +255,41 @@ function shouldFollowup(text, score) {
 
 async function askFollowup() {
   state.followupCount++;
-  // 隐藏 feedback
+  // 隐藏 feedback，进入输入态
   showState('input');
-  // 构造追问 prompt
-  const sys = `${buildPersonaSystem()}\n\n【追问】请基于候选人上一轮回答，问一个具体的追问。每题最多 1 次追问。`;
+  // 拆分追问 prompt：一组 1-3 个子问题（用「追问 N:」分块），保留历史 messages
+  const sys = `${buildPersonaSystem()}
+
+【追问】请基于候选人上一轮回答，输出一组 1-3 个追问。
+要求：
+- 数量：1-3 个（回答充分则 1 个，明显缺失则 2-3 个）
+- 格式：每个追问独占一行，用「追问 1:」「追问 2:」「追问 3:」开头
+- 内容：每次只问新维度，避免重复上一轮的追问；保持犀利不绕弯
+- 不要再寒暄、不要解释、不要总结`;
   showAnalyzing('追问生成中…');
-  const aiText = await callAIStream(sys, [{ role: 'user', content: `【原题】${state.current.q}\n【候选人回答】${state.current.a}\n\n请输出追问（1-2 句话，直接犀利）：` }], 'followup');
+  // 保留历史 messages，避免上下文丢失
+  const historyMsgs = [];
+  if (state.current.followups?.length) {
+    for (const f of state.current.followups) {
+      historyMsgs.push({ role: 'assistant', content: f.q });
+      if (f.a) historyMsgs.push({ role: 'user', content: f.a });
+    }
+  }
+  const messages = [
+    { role: 'user', content: `【原题】${state.current.q}` },
+    { role: 'assistant', content: state.current.q },
+    { role: 'user', content: state.current.a },
+    ...historyMsgs,
+    { role: 'user', content: '请基于以上对话输出下一组追问（1-3 个，用「追问 N:」开头）：' }
+  ];
+  // callAIStream 内部已经创建并填充气泡（appendAiBubble + 逐 chunk 写入），不要再 appendAiBubble
+  const aiText = await callAIStream(sys, messages, 'followup');
   showState('input');
   state.current.lastFollowupQ = aiText;
-  appendAiBubble(aiText);
-  // 隐藏 feedback
+  // 隐藏 feedback / 显示输入
   state.cardRef.querySelector('#__p07-state-feedback').style.display = 'none';
   state.cardRef.querySelector('#__p07-state-input').style.display = '';
-  // 把追问作为新问题区域
+  // 把整组追问作为一组 followups（新一组）
   const followup = { q: aiText, a: null, feedback: null, score: null };
   state.current.followups = state.current.followups || [];
   state.current.followups.push(followup);
@@ -296,7 +319,22 @@ function proceedNext() {
     return;
   }
   // 阶段切换
+function updateProgressBar() {
+  if (!state.cardRef) return;
+  const bar = state.cardRef.querySelector('#__p07-progress-bar');
+  if (!bar) return;
+  const seg = Math.min(state.stageIdx, 4);
+  const segs = Array.from({length: 5}, (_, i) =>
+    '<div style="flex:1; height:6px; border-radius:3px; background:' + (i <= seg ? 'var(--primary)' : 'var(--border)') + '; transition:background 0.3s;"></div>'
+  ).join('');
+  bar.innerHTML = segs;
+}
+
   state.cardRef.querySelector('#__p07-progress').textContent = `${state.stageIdx + 1}/6`;
+  updateProgressBar();
+  const stageLabels2 = ['开场', '简历深挖', '专业问题', '开放问题', '实习/薪资', '反问'];
+  const badge = state.cardRef.querySelector('#__p07-stage-badge');
+  if (badge) badge.textContent = stageLabels2[state.stageIdx] || '';
   state.cardRef.querySelector('#__p07-state-feedback').style.display = 'none';
   state.cardRef.querySelector('#__p07-state-input').style.display = '';
   // 阶段滑动动画
