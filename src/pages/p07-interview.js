@@ -441,6 +441,52 @@ function stripThinkTags(text) {
       t = rest.trim();
     }
   }
+
+  // 7) 【关键】剥离"中文问题中夹杂的英文 reasoning"短语（截到最近的标点）
+  //    解决："讲一个你...变化, and fits ByteDance style. 讲一个你...变化？？"
+  //          "讲一个你...经历, which translates to xxx. 讲讲数据？"
+  //          "讲一个...项目。Question: 你的角色？"
+  const sensitiveKeywords = [
+    'fits ByteDance', 'fits the', 'fits interview', 'fits your',
+    'interview style', 'ByteDance style', 'ByteDance interview',
+    'and fits', ', and', ', which', ', that', ', this',
+    'in ByteDance', 'following ByteDance', 'following the',
+    'Here is', 'The following', 'Note that', 'Please answer',
+    'translates to', 'which translates', 'meaning that',
+    'for the ByteDance', 'with ByteDance',
+    'in Chinese', 'translate to',
+    ', and fits', ', which fits',
+    'Question:', 'Answer:', 'Translation:', 'Note:'
+  ];
+  let cutIdx = -1;
+  for (const kw of sensitiveKeywords) {
+    let searchFrom = 0;
+    while (true) {
+      const idx = t.indexOf(kw, searchFrom);
+      if (idx === -1) break;
+      // 回退到最近的标点（中文/英文标点 + 换行）
+      let p = idx;
+      while (p > 0 && !/[，。！？,.!?;；:：\n]/.test(t[p - 1])) p--;
+      if (p > 0 && (cutIdx === -1 || p < cutIdx)) {
+        cutIdx = p;
+      }
+      searchFrom = idx + kw.length;
+    }
+  }
+  if (cutIdx > 0) {
+    t = t.substring(0, cutIdx).trim();
+  }
+
+  // 8) 处理连续问号 "?{2,}" 或 "？{2,}" → 截到第一个问号
+  //    解决："你的角色是什么？？失败后？"
+  const doubleQ = t.match(/[?？]{2,}/);
+  if (doubleQ) {
+    t = t.substring(0, t.indexOf(doubleQ[0])).trim();
+  }
+
+  // 9) 清理末尾残留的 ", " / "，" / 英文逗号
+  t = t.replace(/[,，]\s*$/, '').trim();
+
   return t.trim();
 }
 

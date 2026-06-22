@@ -249,42 +249,32 @@ function mockResponse({ system, messages, stream, jsonMode }) {
 }
 
 function mockText(system, user, isJson) {
-  // 简易意图识别，返回合理 mock
-  const s = (system || '').slice(0, 200);
-  if (/面试官|interviewer/i.test(s)) {
-    return mockInterviewer(user);
-  }
-  if (/评分|scoring/i.test(s) || /6 维|六维/i.test(s)) {
+  // 【P08 修复】检测范围扩大为整个 system，避免"产品面试官"被优先匹配而跳过评分检测
+  const s = system || '';
+  // 1) 评分/反馈请求 → 直接返回评分 JSON（优先匹配，避免"面试官"误判）
+  if (/评分|scoring|6 维|六维|维度|radar|雷达|反馈报告|honest_take/i.test(s)) {
     return JSON.stringify({
       overall_score: 72,
       radar: {
         '产品感': 75, '逻辑': 70, '表达': 80, '案例': 65, '反问': 60, '抗压': 70
       },
-      优势: ['回答有具体案例支撑', '反思深度不错'],
-      不足: ['缺少量化数据', '结构可以更清晰'],
-      考点分析: [
-        { 考点: '数据基线', 得分: 60, 要点: '案例中缺少对比对象' },
-        { 考点: '增长逻辑', 得分: 70, 要点: '有 AARRR 框架但未分流量来源' },
-        { 考点: '反思深度', 得分: 78, 要点: '提到了改进方向' }
+      '优势': ['回答有具体案例支撑', '反思深度不错'],
+      '不足': ['缺少量化数据', '结构可以更清晰'],
+      '考点分析': [
+        { '考点': '数据基线', '得分': 60, '要点': '案例中缺少对比对象' },
+        { '考点': '增长逻辑', '得分': 70, '要点': '有 AARRR 框架但未分流量来源' },
+        { '考点': '反思深度', '得分': 78, '要点': '提到了改进方向' }
       ],
-      改进建议: [
-        { 优先级: 'P0', 类别: '题目类型', 建议: '做 5 道陌生人场景的"如何验证需求"题' },
-        { 优先级: 'P1', 类别: '思维框架', 建议: '用 STAR 框架结构化拆解案例' },
-        { 优先级: 'P2', 类别: '反思', 建议: '结尾补充"下次我会做 X"的具体动作' }
+      '改进建议': [
+        { '优先级': 'P0', '类别': '题目类型', '建议': '做 5 道陌生人场景的"如何验证需求"题' },
+        { '优先级': 'P1', '类别': '思维框架', '建议': '用 STAR 框架结构化拆解案例' },
+        { '优先级': 'P2', '类别': '反思', '建议': '结尾补充"下次我会做 X"的具体动作' }
       ],
       honest_take: '整体表现中上，能讲清楚自己在做什么，但缺数据、缺对比。建议下次刻意练习"先报数再讲故事"。'
     });
   }
-  if (/包装|经历|productize|包装建议/i.test(s)) {
-    return JSON.stringify({
-      cards: [
-        { original: '参与企业流程建模研究', suggested: '用户需求分析 · 业务流程优化 · 跨部门协作' },
-        { original: '校园产品调研比赛', suggested: '用户调研 · 需求洞察 · 竞品分析' },
-        { original: '数据分析课程项目', suggested: '数据驱动决策 · SQL · AB 实验设计' }
-      ]
-    });
-  }
-  if (/JD|岗位描述|job description|考点/i.test(s)) {
+  // 2) JD 解析
+  if (/JD|岗位描述|job description|考点|公司画像|company_profile/i.test(s)) {
     return JSON.stringify({
       company_profile: {
         company: '字节跳动',
@@ -296,6 +286,20 @@ function mockText(system, user, isJson) {
       competency: ['增长黑客思维', '结构化思考', '数据敏感', '抗压能力'],
       questions: ['讲一个你做的最有数据感的项目', '如何衡量一个功能上线后的效果？', '如果次日留存下降 5% 你怎么排查？']
     });
+  }
+  // 3) 经历包装
+  if (/包装|经历|productize|包装建议/i.test(s)) {
+    return JSON.stringify({
+      cards: [
+        { original: '参与企业流程建模研究', suggested: '用户需求分析 · 业务流程优化 · 跨部门协作' },
+        { original: '校园产品调研比赛', suggested: '用户调研 · 需求洞察 · 竞品分析' },
+        { original: '数据分析课程项目', suggested: '数据驱动决策 · SQL · AB 实验设计' }
+      ]
+    });
+  }
+  // 4) 面试官对话（追问 / 评估）→ 返回面试官风格的文本
+  if (/面试官|interviewer/i.test(s)) {
+    return mockInterviewer(user);
   }
   if (isJson) {
     return JSON.stringify({ status: 'mock', note: 'no api key configured', received: user.slice(0, 100) });

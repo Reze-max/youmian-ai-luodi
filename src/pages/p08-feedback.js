@@ -60,10 +60,9 @@ export async function mount(el, params = {}) {
       toast('💡 当前为 Mock 模式（未配置 LLM_API_KEY）');
     }
   } catch (e) {
-    console.error('[p08] feedback fail', e);
-    toast('反馈生成失败：' + e.message);
-    showFallback(el, interview);
-    return;
+    console.warn('[p08] LLM 失败，降级到本地默认反馈:', e?.message || e);
+    toast('⚠️ AI 评分失败，已生成基础反馈');
+    result = buildDefaultFeedback(qa, interview);
   }
 
   // 写入数据（中文 key，对齐 HONEST_FEEDBACK_PROMPT schema）
@@ -158,11 +157,47 @@ function showFallback(el, interview) {
     <div class="card" style="text-align:center; padding:40px 20px;">
       <div style="font-size:48px; margin-bottom:12px;">🤔</div>
       <div style="font-weight:600; margin-bottom:8px;">没有可分析的内容</div>
-      <div style="font-size:12px; color:var(--text-2); margin-bottom:20px;">你没有完成任何对话，无法生成反馈报告</div>
+      <div style="font-size:12px; color:var(--text-2); margin-bottom:20px;">你没有完成任何对话，无法生成反馈报告。请重新开始面试并完成所有问题。</div>
       <button class="btn btn-primary" onclick="window.__goto('p06')">重新开始面试</button>
     </div>
   `;
   updateInterview(interview.id, { finishedAt: Date.now() });
+}
+
+// 【P08 修复】当 LLM 失败时，用 qa 内容生成基础反馈（不显示 fallback）
+function buildDefaultFeedback(qa, interview) {
+  const totalLen = qa.reduce((s, q) => s + (q.a?.length || 0), 0);
+  const avgLen = qa.length ? Math.round(totalLen / qa.length) : 0;
+  const base = Math.min(85, Math.max(45, Math.round(avgLen * 0.8 + 30)));
+  const radar = {
+    '产品感': base,
+    '逻辑': base + (Math.random() > 0.5 ? 3 : -5),
+    '表达': base + (avgLen > 100 ? 5 : -3),
+    '案例': base + (avgLen > 80 ? 4 : -8),
+    '反问': 60,
+    '抗压': base - 2
+  };
+  return {
+    overall_score: base,
+    radar,
+    '优势': avgLen > 80
+      ? ['回答有具体内容，表达了核心想法', '完成了全部 6 个阶段问题']
+      : ['完成了部分阶段问题'],
+    '不足': avgLen < 60
+      ? ['回答偏短，缺少具体数据和案例支撑', '可以多用 STAR 框架展开']
+      : ['可以补充更多量化数据', '结尾可以加入反思改进'],
+    '考点分析': qa.slice(0, 5).map((q, i) => ({
+      '考点': '第 ' + (i + 1) + ' 阶段',
+      '得分': Math.max(50, base - 5 + i * 2),
+      '要点': q.a ? ('回答长度 ' + q.a.length + ' 字') : '未回答'
+    })),
+    '改进建议': [
+      { '优先级': 'P0', '类别': '回答深度', '建议': '每个回答至少 100 字，包含背景-行动-结果' },
+      { '优先级': 'P1', '类别': '数据量化', '建议': '补充 1-2 个具体数字（用户数/留存率/转化率）' },
+      { '优先级': 'P2', '类别': '反思', '建议': '结尾加上"如果重来我会..."的反思' }
+    ],
+    honest_take: '本次面试基于本地规则生成基础反馈（LLM 调用失败）。' + (avgLen < 60 ? '回答偏短，建议多用具体案例和量化数据。' : '回答有内容，建议补充更多细节和反思。') + ' 建议重新面试以获得 AI 深度反馈。'
+  };
 }
 
 function extractJson(s) {
