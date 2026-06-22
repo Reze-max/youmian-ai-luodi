@@ -73,7 +73,7 @@ function renderShell(el) {
   // 6 阶段映射到 5 段进度条（最后两段合并）
   const seg = Math.min(state.stageIdx, 4);
   const segs = Array.from({length: 5}, (_, i) =>
-    '<div style="flex:1; height:6px; border-radius:3px; background:' + (i <= seg ? 'var(--primary)' : 'var(--border)') + '; transition:background 0.3s;"></div>'
+    '<div style="flex:1; height:8px; border-radius:4px; background:' + (i <= seg ? 'linear-gradient(90deg, #5B4FE9, #7B68EE)' : '#E5E7EB') + '; transition:background 0.3s;"></div>'
   ).join('');
 
   el.innerHTML = `
@@ -325,7 +325,7 @@ function updateProgressBar() {
   if (!bar) return;
   const seg = Math.min(state.stageIdx, 4);
   const segs = Array.from({length: 5}, (_, i) =>
-    '<div style="flex:1; height:6px; border-radius:3px; background:' + (i <= seg ? 'var(--primary)' : 'var(--border)') + '; transition:background 0.3s;"></div>'
+    '<div style="flex:1; height:8px; border-radius:4px; background:' + (i <= seg ? 'linear-gradient(90deg, #5B4FE9, #7B68EE)' : '#E5E7EB') + '; transition:background 0.3s;"></div>'
   ).join('');
   bar.innerHTML = segs;
 }
@@ -406,7 +406,7 @@ function buildEvalSystem() {
 }
 
 // ===== 通用：流式调用 =====
-// ===== 工具：剥掉 AI 输出的 思考/推理 标签，只保留给候选人看的内容 =====
+// ===== 工具：剥掉 AI 输出的 思考/推理 标签 + 英文引导词，只保留给候选人看的内容 =====
 function stripThinkTags(text) {
   if (!text) return '';
   let t = String(text);
@@ -419,6 +419,28 @@ function stripThinkTags(text) {
   // 4) 启发式切掉 "思考过程：" 之后的内容
   const m = t.match(/^(.{0,400}?)(?:\n\s*\n)?(?:思考过程|推理过程|分析过程|Thought|Reasoning)\s*[:：]/);
   if (m && m[1].trim().length > 10) t = m[1].trim();
+  // 5) 激进剥离：开头如果是英文引导词（>= 4 字符英文，无中文），截到第一个中文字符
+  //    解决 "question that fits the ByteDance interview style. 讲一个..." 这种英文 reasoning
+  const cnIdx = t.search(/[一-龥]/);
+  if (cnIdx > 3) {
+    const head = t.substring(0, cnIdx);
+    if (!/[一-龥]/.test(head)) {
+      // 头部无中文（全是英文/标点/空白），视为 reasoning 引导词，截掉
+      t = t.substring(cnIdx).trim();
+    }
+  }
+  // 6) 进一步剥离常见英文引导残留：开头整行若是纯英文 + 中文，删除该英文行
+  //    例："question that fits the ByteDance interview style.\n讲一个你在字节..."
+  const lineMatch = t.match(/^([\s\S]*?)\n([\s\S]*)$/);
+  if (lineMatch) {
+    const firstLine = lineMatch[1].trim();
+    const rest = lineMatch[2];
+    // 若第一行无中文且长度 < 120，且剩余部分包含中文 → 丢弃第一行
+    if (firstLine.length > 0 && firstLine.length < 120
+        && !/[一-龥]/.test(firstLine) && /[一-龥]/.test(rest)) {
+      t = rest.trim();
+    }
+  }
   return t.trim();
 }
 
