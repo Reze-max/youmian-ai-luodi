@@ -22,6 +22,18 @@ export async function mount(el, params = {}) {
   // 初始化 state
   if (!state || state.id !== interview.id) {
     const resume = getResume();
+    // 【P07 修复】从 store 恢复 stageIdx（用户刷新/网络中断后能从中断处继续）
+    const savedStages = interview.stages || [];
+    const stageMap = ['opening', 'resume', 'professional', 'open', 'logistics', 'reverse'];
+    let resumeFromStageIdx = 0;
+    if (savedStages.length > 0) {
+      let lastIdx = -1;
+      for (let i = 0; i < stageMap.length; i++) {
+        const s = savedStages.find(x => x.key === stageMap[i]);
+        if (s && s.qa && s.qa.length > 0) lastIdx = i;
+      }
+      resumeFromStageIdx = Math.min(lastIdx + 1, stageMap.length);
+    }
     state = {
       id: interview.id,
       interview,
@@ -31,15 +43,16 @@ export async function mount(el, params = {}) {
       position: interview.position,
       jobType: interview.jobType,
       pressure: interview.pressure,
-      stageIdx: 0, // 当前阶段 0-5
-      stageMap: ['opening', 'resume', 'professional', 'open', 'logistics', 'reverse'],
-      current: null,  // 当前 Q&A: {q, a, feedback, score, followups: []}
-      stages: interview.stages || [],
+      stageIdx: resumeFromStageIdx,
+      stageMap,
+      current: null,
+      stages: savedStages,
       followupCount: 0,
-      maxFollowup: 2,  // 每题最多追问 2 组（每组 1-3 个子问题）
+      maxFollowup: 2,
       aiStreaming: false,
       abort: null,
-      cardRef: null
+      cardRef: null,
+      _resumedFromSaved: resumeFromStageIdx > 0
     };
     // 加载题库
     if (!bankCache) {
@@ -53,6 +66,11 @@ export async function mount(el, params = {}) {
     }
   }
 
+  // 【P07 修复】如果 store 中已 stageIdx=6（已完成 6 阶段），跳 P08
+  if (state.stageIdx >= state.stageMap.length) {
+    goto('p08', { id: state.id });
+    return;
+  }
   renderShell(el);
   await askNextQuestion();
 }
@@ -464,9 +482,11 @@ function stripThinkTags(text) {
     while (true) {
       const idx = t.indexOf(kw, searchFrom);
       if (idx === -1) break;
-      // 回退到最近的标点（中文/英文标点 + 换行）
+      // 回退到"英文段开始处"：跳过英文/空格/标点，停在最后一个中文字符后
+      // 这样保留 "结果数据怎么变化的，" 中"变化的"等内容
       let p = idx;
-      while (p > 0 && !/[，。！？,.!?;；:：\n]/.test(t[p - 1])) p--;
+      while (p > 0 && /[a-zA-Z\s]/.test(t[p - 1])) p--;
+      // p 现在是英文段前的最后一个字符位置 + 1
       if (p > 0 && (cutIdx === -1 || p < cutIdx)) {
         cutIdx = p;
       }
@@ -486,6 +506,67 @@ function stripThinkTags(text) {
 
   // 9) 清理末尾残留的 ", " / "，" / 英文逗号
   t = t.replace(/[,，]\s*$/, '').trim();
+
+  // 10) 【关键】剥离"问题中段夹杂的英文 reasoning"（非敏感词列表的）
+  const mixedEn = t.match(/[a-zA-Z]{4,}[\s.,;:!?]*[一-龥？]/);
+  if (mixedEn) {
+    const idx = mixedEn.index;
+    let p = idx;
+    while (p > 0 && !/[，。！？,.!?;；:：\n]/.test(t[p - 1])) p--;
+    if (p > 0) {
+      const before = t.substring(0, p).trim();
+      if (before.length > 10 && /[一-龥]/.test(before)) {
+        t = before;
+      }
+    }
+  }
+
+  // 11) 检测"问题重复" → 截到第一个问号
+  const firstQ = t.search(/[？?]/);
+  if (firstQ >= 0) {
+    const afterFirst = t.substring(firstQ + 1);
+    const secondQRel = afterFirst.search(/[？?]/);
+    if (secondQRel >= 0) {
+      t = t.substring(0, firstQ + 1);
+    }
+  }
+
+  // 12) 检测"问句重复"（后半句和前半句几乎相同）→ 截到第一个问号
+  const q1 = t.indexOf('？');
+  const q2 = t.indexOf('?');
+  const fq = (q1 >= 0 && q2 >= 0) ? Math.min(q1, q2) : Math.max(q1, q2);
+  if (fq > 10) {
+    const before = t.substring(0, fq);
+    const after = t.substring(fq + 1).trim();
+    if (after.length > 5) {
+      const beforeTail = before.slice(-15).replace(/[，。！？,.!?;；:：\s]/g, '');
+      const afterHead = after.slice(0, 30).replace(/[，。！？,.!?;；:：\s]/g, '');
+      if (beforeTail.length >= 5 && afterHead.includes(beforeTail.slice(0, 8))) {
+        t = before + '？';
+      }
+    }
+  }
+
+  // 13) 【关键】检测"无问号的重复段落" → 截到重复段开始处
+  //    解决："讲一个你...变化的, and fits... 讲一个你...变化的"
+  //    即使没有 "？"，如果文本中前 12 字符在后面又出现，就截断
+  if (t.length > 30) {
+    const head = t.substring(0, 12).replace(/[，。！？,.!?;；:：\s]/g, '');
+    if (head.length >= 8) {
+      // 在 t[12:] 中找 head
+      const rest = t.substring(12);
+      const dupIdx = rest.indexOf(head);
+      if (dupIdx > 0) {
+        // 找到重复段开始处（rest 中的 head 位置） → t 中是 12 + dupIdx
+        t = t.substring(0, 12 + dupIdx).trim();
+      }
+    }
+  }
+
+  // 14) 补充：如果文本超长且没有任何问号/句号 → 截到 200 字
+  if (t.length > 200) {
+    t = t.substring(0, 200).trim();
+  }
 
   return t.trim();
 }

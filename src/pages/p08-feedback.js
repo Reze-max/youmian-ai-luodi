@@ -1,15 +1,29 @@
 ﻿// P08 · 面试结束反馈页
 import { goto, toast } from '../lib/router.js';
-import { getInterview, updateInterview } from '../lib/store.js';
+import { getInterview, updateInterview, listInterviews } from '../lib/store.js';
 import { callLLM } from '../lib/llm.js';
 import { renderRadar, RADAR_DIMS } from '../lib/radar.js';
 import { COMPANIES } from '../lib/persona.js';
 
 export async function mount(el, params = {}) {
-  const id = params.id || sessionStorage.getItem('youmian:currentInterviewId');
+  // 【P08 修复】三级 fallback：params.id → sessionStorage → store 最新一条
+  // 解决：P08 完成反馈后清空 sessionStorage，用户刷新后找不到面试的 bug
+  let id = params.id || sessionStorage.getItem('youmian:currentInterviewId');
+  if (!id) {
+    const list = listInterviews();
+    if (list.length) {
+      list.sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0));
+      id = list[0].id;
+    }
+  }
   const interview = getInterview(id);
   if (!interview) {
-    el.innerHTML = `<div class="card">未找到面试记录 <button class="btn btn-primary" onclick="window.__goto('p03')">回首页</button></div>`;
+    el.innerHTML = `<div class="card" style="text-align:center; padding:40px 20px;">
+      <div style="font-size:48px; margin-bottom:12px;">📭</div>
+      <div style="font-weight:600; margin-bottom:8px;">还没有面试记录</div>
+      <div style="font-size:12px; color:var(--text-2); margin-bottom:20px;">请先开始一次模拟面试，完成后会在这里生成复盘报告</div>
+      <button class="btn btn-primary" onclick="window.__goto('p06')">🚀 开始面试</button>
+    </div>`;
     return;
   }
 
@@ -80,7 +94,8 @@ export async function mount(el, params = {}) {
   interview.finishedAt = Date.now();
   interview.label = interview.scores.overall_score >= 75 ? '一面过' : interview.scores.overall_score >= 60 ? '需复盘' : '一面挂';
   updateInterview(interview.id, interview);
-  sessionStorage.removeItem('youmian:currentInterviewId');
+  // 【P08 修复】不再清空 sessionStorage，让用户从 P09/手动刷新都能重新进入当前面试
+  // sessionStorage 会在 P06 创建新面试时被覆盖，无需在此清空
 
   render(el, interview, result, companyMeta);
 }
