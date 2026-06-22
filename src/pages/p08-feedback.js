@@ -27,7 +27,10 @@ export async function mount(el, params = {}) {
     return;
   }
 
-  // 临时显示加载态
+  // 【P08 修复】加载态加倒计时 + 跳过按钮 + 8s 超时保护
+  const LOADING_TIMEOUT_MS = 8000;
+  const loadingDeadline = Date.now() + LOADING_TIMEOUT_MS;
+  let userSkipped = false;
   el.innerHTML = `
     <div style="min-height:100vh; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:40px 24px; text-align:center;">
       <div class="p07-spinner" style="width:48px; height:48px; border-width:5px;"></div>
@@ -35,8 +38,23 @@ export async function mount(el, params = {}) {
       <p style="font-size:13px; color:var(--text-2); max-width:280px; line-height:1.7;">
         综合分析你刚才 6 个阶段的回答<br/>基于 6 维评分 + 诚实反馈生成结构化报告
       </p>
+      <div id="__p08-countdown" style="margin-top:16px; font-size:12px; color:var(--text-3);">最多等待 8 秒</div>
+      <button id="__p08-skip" class="btn btn-outline" style="margin-top:16px; max-width:240px;">跳过 AI 评分，使用基础反馈</button>
     </div>
   `;
+  // 倒计时更新
+  const countdownTimer = setInterval(() => {
+    if (userSkipped) { clearInterval(countdownTimer); return; }
+    const left = Math.max(0, Math.round((loadingDeadline - Date.now()) / 1000));
+    const el2 = document.getElementById('__p08-countdown');
+    if (el2) el2.textContent = left > 0 ? `最多等待 ${left} 秒…` : '即将使用基础反馈…';
+    if (left <= 0) clearInterval(countdownTimer);
+  }, 500);
+  // 跳过按钮
+  const skipBtn = document.getElementById('__p08-skip');
+  if (skipBtn) skipBtn.onclick = () => { userSkipped = true; clearInterval(countdownTimer); };
+  // 【P08 修复】8s 超时强制跳过（防止上游 LLM 永远挂起）
+  const timeoutPromise = new Promise(resolve => setTimeout(() => resolve({ timedOut: true }), LOADING_TIMEOUT_MS));
 
   // 提取 Q&A 摘要
   const qa = (interview.stages || []).flatMap(s => s.qa || []).slice(0, 12).map(q => ({
@@ -62,18 +80,34 @@ export async function mount(el, params = {}) {
 
   let result = null;
   try {
-    const r = await callLLM({
+    // 【P08 修复】Promise.race：用户跳过 或 8s 超时 → 立即用本地 mock
+    const llmPromise = callLLM({
       system,
       messages: [{ role: 'user', content: '请输出严格 JSON 反馈：' }],
       jsonMode: true,
       temperature: 0.4,
       maxTokens: 1500
     });
-    result = JSON.parse(extractJson(r.text));
-    if (r.mode === 'mock') {
-      toast('💡 当前为 Mock 模式（未配置 LLM_API_KEY）');
+    const skipPromise = new Promise(resolve => {
+      const checkSkip = setInterval(() => {
+        if (userSkipped) { clearInterval(checkSkip); resolve({ skipped: true }); }
+      }, 200);
+    });
+    const r = await Promise.race([llmPromise, skipPromise, timeoutPromise]);
+    clearInterval(countdownTimer);
+    if (r?.timedOut || r?.skipped) {
+      const reason = r.timedOut ? 'AI 评分超时' : '已跳过 AI 评分';
+      console.warn('[p08]', reason, '→ 使用本地默认反馈');
+      toast('⚠️ ' + reason + '，已生成基础反馈');
+      result = buildDefaultFeedback(qa, interview);
+    } else {
+      result = JSON.parse(extractJson(r.text));
+      if (r.mode === 'mock') {
+        toast('💡 当前为 Mock 模式（未配置 LLM_API_KEY）');
+      }
     }
   } catch (e) {
+    clearInterval(countdownTimer);
     console.warn('[p08] LLM 失败，降级到本地默认反馈:', e?.message || e);
     toast('⚠️ AI 评分失败，已生成基础反馈');
     result = buildDefaultFeedback(qa, interview);

@@ -52,17 +52,23 @@ export default async function handler(req, res) {
   };
   if (jsonMode) upstreamBody.response_format = { type: 'json_object' };
 
+  // 【修复】upstream fetch 加 15s 超时（防止上游 LLM 永久挂起导致 Vercel Function 卡死）
+  const UPSTREAM_TIMEOUT_MS = 15000;
+  const ctrl = new AbortController();
+  const upTimer = setTimeout(() => ctrl.abort(), UPSTREAM_TIMEOUT_MS);
   try {
     res.setHeader('X-LLM-Mode', provider);
-  res.setHeader('Access-Control-Expose-Headers', 'X-LLM-Mode, X-LLM-Error');
-  const upstream = await fetch(cfg.endpoint, {
+    res.setHeader('Access-Control-Expose-Headers', 'X-LLM-Mode, X-LLM-Error');
+    const upstream = await fetch(cfg.endpoint, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': 'Bearer ' + cfg.apiKey
       },
-      body: JSON.stringify(upstreamBody)
+      body: JSON.stringify(upstreamBody),
+      signal: ctrl.signal
     });
+    clearTimeout(upTimer);
 
     if (!upstream.ok) {
       const errText = await upstream.text();
@@ -98,8 +104,10 @@ export default async function handler(req, res) {
       res.status(200).json(data);
     }
   } catch (e) {
-    console.error('[llm] proxy error', e);
-    return mockResponse(req, res, { system, messages, stream, jsonMode, error: e.message });
+    clearTimeout(upTimer);
+    const isTimeout = e.name === 'AbortError' || /aborted|timeout/i.test(e.message || '');
+    console.error('[llm] proxy error', e.name, e.message, isTimeout ? '(超时)' : '');
+    return mockResponse(req, res, { system, messages, stream, jsonMode, error: isTimeout ? 'upstream timeout (15s)' : e.message });
   }
 };
 
@@ -173,26 +181,28 @@ function mockText(system, user, isJson, error) {
     if (len < 80) return '不错，你提到了核心经历。能不能再具体量化一下，比如数据基线是多少？你最终带来了什么结果？';
     return '挺好，你讲得比较具体。我追问一下：你刚才提到的那个数字，分母是什么？对比对象是谁？如果换个场景，你会怎么做？';
   }
-  if (/评分|scoring|6 维/i.test(s)) {
+  if (/评分|scoring|6 维|维度|radar|雷达|反馈报告|honest_take/i.test(s)) {
     return JSON.stringify({
-      overall: 72,
-      expression: 70,
-      logic: 68,
-      productSense: 75,
-      dataSense: 65,
-      reflection: 80,
-      reverse: 70,
-      strengths: ['回答有具体案例支撑', '反思深度不错'],
-      weaknesses: ['缺少量化数据', '结构可以更清晰'],
-      keypoints: [
-        { name: '数据基线', score: 60 },
-        { name: '增长逻辑', score: 70 },
-        { name: '反思深度', score: 78 }
+      overall_score: 72,
+      radar: {
+        '产品感': 75,
+        '逻辑': 68,
+        '表达': 70,
+        '案例': 65,
+        '反问': 70,
+        '抗压': 80
+      },
+      '优势': ['回答有具体案例支撑', '反思深度不错'],
+      '不足': ['缺少量化数据', '结构可以更清晰'],
+      '考点分析': [
+        { '考点': '数据基线', '得分': 60, '要点': '案例中缺少对比对象' },
+        { '考点': '增长逻辑', '得分': 70, '要点': '有 AARRR 框架但未分流量来源' },
+        { '考点': '反思深度', '得分': 78, '要点': '提到了改进方向' }
       ],
-      suggestions: [
-        '回答中加入具体数据基线和对比对象',
-        '用 STAR 框架结构化拆解案例',
-        '结尾补充反思 + 量化结果'
+      '改进建议': [
+        { '优先级': 'P0', '类别': '题目类型', '建议': '回答中加入具体数据基线和对比对象' },
+        { '优先级': 'P1', '类别': '思维框架', '建议': '用 STAR 框架结构化拆解案例' },
+        { '优先级': 'P2', '类别': '反思', '建议': '结尾补充反思 + 量化结果' }
       ],
       honest_take: '整体表现中上，能讲清楚自己在做什么，但缺数据，缺对比。建议下次刻意练习"先报数再讲故事"。'
     });
