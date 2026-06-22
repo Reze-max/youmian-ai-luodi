@@ -347,36 +347,41 @@ function updateProgressBar() {
 async function askNextQuestion() {
   const stageKey = state.stageMap[state.stageIdx];
   let q = '';
+  // 关键：resume / open 走流式生成（callAIStream 内部已 appendAiBubble + 流式填充），
+  //       不要再次 appendAiBubble，否则会重复气泡。
   if (stageKey === 'opening') {
     q = `你好，欢迎参加 ${state.company} ${state.position} 的面试。请先用 2-3 分钟做一个自我介绍，包括你的学校、专业、和这个岗位相关的核心经历。`;
+    appendAiBubble(q);
   } else if (stageKey === 'resume') {
-    q = await generateResumeQuestion();
+    q = await generateResumeQuestion();   // 内部已创建气泡
   } else if (stageKey === 'professional') {
     q = pickFromBank('业务考察', state.company);
+    appendAiBubble(q);
   } else if (stageKey === 'open') {
-    q = await generateOpenQuestion();
+    q = await generateOpenQuestion();     // 内部已创建气泡
   } else if (stageKey === 'logistics') {
     q = state.jobType === 'intern'
       ? '你最快什么时候能开始实习？一周能到岗几天？预计能持续多长时间？'
       : '你对薪资有什么样的预期？期望工作地点是哪里？';
+    appendAiBubble(q);
   } else if (stageKey === 'reverse') {
     q = '我们这场面试接近尾声，你有什么想问我的吗？';
+    appendAiBubble(q);
   }
 
   state.current = { q, a: null, score: null, feedback: null, stage: stageKey };
-  appendAiBubble(q);
   showState('input');
   state.cardRef.querySelector('#__p07-input').focus();
 }
 
 async function generateResumeQuestion() {
-  const sys = `${buildPersonaSystem()}\n\n【任务】基于候选人简历，问一个"简历深挖"问题（200字内）。针对简历中的某段经历/项目，问具体方法、量化结果、反思。`;
-  return await callAIStream(sys, [{ role: 'user', content: `【简历】\n${state.resumeSnip || '（未提供）'}\n\n请输出追问问题：` }], 'q');
+  const sys = `${buildPersonaSystem()}\n\n【任务】基于候选人简历，问一个"简历深挖"问题（200字内）。针对简历中的某段经历/项目，问具体方法、量化结果、反思。\n【严格约束】\n- 必须只用中文输出\n- 直接以问句开始，禁止任何前缀、过渡句、思考过程\n- 禁止出现 "question"、"Here is"、"The following"、"翻译"、"answer" 等英文/引导词\n- 一句话问完，不要拆分多行`;
+  return await callAIStream(sys, [{ role: 'user', content: `【简历】\n${state.resumeSnip || '（未提供）'}\n\n请直接输出中文追问问题（一句话问完，不要任何前缀）：` }], 'q');
 }
 
 async function generateOpenQuestion() {
-  const sys = `${buildPersonaSystem()}\n\n【任务】基于 ${state.company} 风格，问一个行为面试题（200字内），如团队冲突、失败经历、抗压等。`;
-  return await callAIStream(sys, [{ role: 'user', content: '请输出开放性问题：' }], 'q');
+  const sys = `${buildPersonaSystem()}\n\n【任务】基于 ${state.company} 风格，问一个行为面试题（200字内），如团队冲突、失败经历、抗压等。\n【严格约束】\n- 必须只用中文输出\n- 直接以问句开始，禁止任何前缀、过渡句、思考过程\n- 禁止出现 "question"、"Here is"、"The following"、"fits the"、"interview style" 等英文/引导词\n- 一句话问完，不要拆分多行`;
+  return await callAIStream(sys, [{ role: 'user', content: '请直接输出中文行为面试问题（一句话问完，不要任何前缀）：' }], 'q');
 }
 
 function pickFromBank(stageLabel, company) {
@@ -475,10 +480,10 @@ function appendUserBubble(text) {
   const conv = state.cardRef.querySelector('#__p07-conversation');
   const wrap = document.createElement('div');
   wrap.className = 'p07-slide-in';
-  wrap.style.cssText = 'display:flex; gap:8px; margin-bottom:12px; align-items:flex-start; flex-direction:row-reverse;';
+  wrap.style.cssText = 'display:flex; gap:8px; margin-bottom:12px; align-items:flex-start; justify-content:flex-end;';
   wrap.innerHTML = `
+    <div class="p07-user-bubble" style="max-width:80%; width:fit-content; background:var(--primary); color:white; padding:10px 14px; border-radius:14px 14px 4px 14px; font-size:14px; line-height:1.6; word-break:break-word; white-space:pre-wrap;"></div>
     <div style="width:36px; height:36px; background:var(--text-3); color:white; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:14px; flex-shrink:0;">我</div>
-    <div class="p07-user-bubble" style="flex:1; background:var(--primary); color:white; padding:10px 14px; border-radius:14px 14px 4px 14px; font-size:14px; line-height:1.6;"></div>
   `;
   wrap.querySelector('.p07-user-bubble').textContent = text;
   conv.appendChild(wrap);
